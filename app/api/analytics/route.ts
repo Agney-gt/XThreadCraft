@@ -1,119 +1,72 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "../auth/authOptions";
-import OAuth from "oauth-1.0a";
-import crypto from "crypto";
+import { type NextRequest, NextResponse } from "next/server"
+import { getUserData, getFollowersData, getFollowingData, getTimelineData } from "@/lib/twitter-cache"
 
-interface TwitterData {
-  id: string;
-  text: string;
-  public_metrics: {
-    retweet_count: number;
-    reply_count: number;
-    like_count: number;
-    quote_count: number;
-  };
-}
-
-interface CacheEntry {
-  data: TwitterData[];
-  timestamp: number;
-}
-
-const CACHE = new Map<string, CacheEntry>();
-const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
-
-
-export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-
-  if (!session || !session.user || !session.accessToken || !session.accessSecret) {
-    console.error("Unauthorized request:", session);
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { searchParams } = new URL(req.url);
-  const userId = searchParams.get("userId");
-
-  if (!userId) {
-    console.error("Missing userId in request");
-    return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
-  }
-
-  console.log("Fetching analytics for user:", userId);
-
-  // Check Cache First
-  if (CACHE.has(userId)) {
-    const { data, timestamp } = CACHE.get(userId)!;
-    if (Date.now() - timestamp < CACHE_DURATION) {
-      console.log("Returning cached data for user:", userId);
-      return NextResponse.json({ data }, { status: 200 });
-    }
-  }
-
+export async function GET(request: NextRequest) {
   try {
-    const oauth = new OAuth({
-      consumer: {
-        key: process.env.TWITTER_API_KEY as string,
-        secret: process.env.TWITTER_API_SECRET as string,
+    const searchParams = request.nextUrl.searchParams
+    const timeframe = searchParams.get("timeframe") || "14d"
+
+    // Use the provided user ID
+    const userId = "1892784428868653057" // Fallback to provided user ID
+
+    // Fetch all data in parallel using our cached functions
+    const [userData, followersData, followingData, timelineData] = await Promise.all([
+      getUserData(userId),
+      getFollowersData(userId),
+      getFollowingData(userId),
+      getTimelineData(userId),
+    ])
+
+    // Process tweets
+    const tweets = timelineData.data || []
+
+    // Get today's tweets
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    const todayTweets = tweets.filter((tweet) => {
+      const tweetDate = new Date(tweet.created_at)
+      return tweetDate >= today
+    })
+
+    // Calculate metrics
+    const metrics = {
+      impressions: tweets.reduce((sum, tweet) => sum + (tweet.public_metrics?.impression_count || 0), 0),
+      likes: tweets.reduce((sum, tweet) => sum + (tweet.public_metrics?.like_count || 0), 0),
+      replies: tweets.reduce((sum, tweet) => sum + (tweet.public_metrics?.reply_count || 0), 0),
+      retweets: tweets.reduce((sum, tweet) => sum + (tweet.public_metrics?.retweet_count || 0), 0),
+      profileClicks: Math.floor(Math.random() * 50), // Mock data as this isn't directly available
+    }
+
+    // Mock top interactions (as this requires more complex analysis)
+    const topInteractions =
+      followersData.data?.slice(0, 5).map((follower) => ({
+        id: follower.id,
+        username: follower.username,
+        profile_image_url: follower.profile_image_url || "/placeholder.svg?height=48&width=48",
+      })) || []
+
+    // Prepare response data
+    const analyticsData = {
+      user: {
+        id: userData.id,
+        name: userData.name,
+        username: userData.username,
+        profile_image_url: userData.profile_image_url || "/placeholder.svg?height=128&width=128",
+        following_count: followingData.meta?.result_count || 0,
+        followers_count: followersData.meta?.result_count || 0,
+        tweet_count: userData.public_metrics?.tweet_count || 0,
       },
-      signature_method: "HMAC-SHA1",
-      hash_function(base_string, key) {
-        return crypto.createHmac("sha1", key).update(base_string).digest("base64");
-      },
-    });
+      tweets,
+      todayTweets,
+      metrics,
+      topInteractions,
+    }
 
-    const token = {
-      key: session.accessToken,
-      secret: session.accessSecret,
-    };
-
-    const url = `https://api.twitter.com/2/users/${userId}/tweets?tweet.fields=public_metrics`;
-    const authHeader = oauth.toHeader(oauth.authorize({ url, method: "GET" }, token));
-
-    // Retry logic for rate limiting
-    const fetchWithRetry = async (retries = 3, delay = 5000): Promise<NextResponse> => {
-      for (let i = 0; i < retries; i++) {
-        const response = await fetch(url, {
-          method: "GET",
-          headers: {
-            ...authHeader,
-            "Content-Type": "application/json",
-          },
-        });
-
-        // Check rate limit headers
-        const limitReset = response.headers.get("x-rate-limit-reset");
-
-        if (response.status === 429) {
-          const waitTime = limitReset
-            ? Number(limitReset) * 1000 - Date.now()
-            : delay * (i + 1);
-          console.warn(`Rate limit hit. Retrying after ${waitTime / 1000} seconds...`);
-          await new Promise((resolve) => setTimeout(resolve, waitTime));
-          continue;
-        }
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error("Twitter API Error:", response.status, errorText);
-          return NextResponse.json({ error: "Failed to fetch tweets" }, { status: response.status });
-        }
-
-        const twitterData = await response.json();
-        console.log("Twitter API Response:", twitterData);
-
-        // Store in cache
-        CACHE.set(userId, { data: twitterData.data, timestamp: Date.now() });
-
-        return NextResponse.json({ data: twitterData.data }, { status: 200 });
-      }
-      return NextResponse.json({ error: "Too many requests, try again later" }, { status: 429 });
-    };
-
-    return await fetchWithRetry();
+    return NextResponse.json(analyticsData)
   } catch (error) {
-    console.error("Internal Server Error:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    console.error("Error fetching Twitter analytics:", error)
+    return NextResponse.json({ error: "Failed to fetch Twitter analytics data" }, { status: 500 })
   }
 }
+
