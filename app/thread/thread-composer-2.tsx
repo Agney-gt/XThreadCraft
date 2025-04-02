@@ -12,9 +12,6 @@ interface Tweet {
   imageFile?: File
 }
 
-
-const MAX_TWEET_LENGTH = 160
-
 export function ThreadComposer2() {
   const [content, setContent] = useState("")
   const [tweets, setTweets] = useState<Tweet[]>([])
@@ -52,10 +49,8 @@ export function ThreadComposer2() {
         setIsPosting(false)
         return
       }
-
       setIsPosting(true)
       const formData = new FormData()
-
       console.log("Tweets before submission:", tweets)
 
       tweets.forEach((tweet, index) => {
@@ -141,7 +136,7 @@ export function ThreadComposer2() {
         </div>
       </Card>
       <Card className="p-4">
-        <ThreadPreview tweets={tweets} />
+        <ThreadPreview tweets={tweets} setTweets={setTweets} />
         <div className="mt-4">
           <Button className="w-full" onClick={handleSubmit} disabled={tweets.length === 0 || isPosting}>
             {isPosting ? "Posting..." : "Share on Twitter now"}

@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { TurnstileWrapper } from "./turnstile-wrapper";
 import { useState } from "react";
+import TweetDeleterPage from "../tweet-deleter/page";
 export default function ThreadPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -17,7 +18,7 @@ export default function ThreadPage() {
     if (status !== "loading" && !session) {
       router.push("/login");
     }
-
+    console.log(session)
   }
 , []);
 
@@ -66,6 +67,7 @@ export default function ThreadPage() {
           <SavedThreads />
         </div>
       </main>
+      <TweetDeleterPage/>
     </div>
   );
 }
